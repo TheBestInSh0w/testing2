@@ -21,7 +21,7 @@ async function startBrowser() {
 
     browser = await puppeteer.launch({
         headless: false,
-        executablePath: "/nix/var/nix/profiles/default/bin/chromium", // ⭐ WORKING RAILWAY PATH
+        executablePath: "/usr/bin/chromium",   // ⭐ APT-installed Chromium
         args: [
             "--no-sandbox",
             "--disable-setuid-sandbox",
@@ -36,7 +36,7 @@ async function startBrowser() {
 
     page = await browser.newPage();
 
-    // ⭐ PUT YOUR CLIENT URL HERE
+    // ⭐ Your hosted client URL
     await page.goto("https://YOUR-RAILWAY-APP.up.railway.app/client.html", {
         waitUntil: "load"
     });
