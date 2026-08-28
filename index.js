@@ -21,7 +21,6 @@ async function startBrowser() {
 
     browser = await puppeteer.launch({
         headless: false,
-        executablePath: "/usr/bin/chromium",   // ⭐ APT-installed Chromium
         args: [
             "--no-sandbox",
             "--disable-setuid-sandbox",
@@ -36,21 +35,18 @@ async function startBrowser() {
 
     page = await browser.newPage();
 
-    // ⭐ Your hosted client URL
     await page.goto("https://YOUR-RAILWAY-APP.up.railway.app/client.html", {
         waitUntil: "load"
     });
 
     console.log("[BRIDGE] Cloud Eagler client loaded");
 
-    // Cloud → Bridge
     await page.exposeFunction("cloudToBridge", (arr) => {
         const b64 = Buffer.from(Uint8Array.from(arr)).toString("base64");
         queue.push(b64);
         console.log("[BRIDGE] Packet from cloud | bytes:", arr.length);
     });
 
-    // Hook WebSocket inside cloud client
     await page.evaluate(() => {
         const OrigWS = window.WebSocket;
 
@@ -88,7 +84,6 @@ startBrowser().catch(err => {
     console.error("[BRIDGE] Chrome failed:", err);
 });
 
-// /send (local → cloud → server)
 app.post("/send", async (req, res) => {
     try {
         const raw = Buffer.from(req.body, "base64");
@@ -111,7 +106,6 @@ app.post("/send", async (req, res) => {
     }
 });
 
-// /recv (server → cloud → local)
 app.get("/recv", (req, res) => {
     if (queue.length > 0) {
         res.send(queue.shift());
@@ -120,7 +114,6 @@ app.get("/recv", (req, res) => {
     }
 });
 
-// Serve your Eagler client HTML
 app.use(express.static("public"));
 
 app.listen(3000, () => {
