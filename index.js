@@ -18,19 +18,23 @@ let queue = [];
 async function startBrowser() {
     console.log("[BRIDGE] Launching Chrome...");
 
-    browser = await puppeteer.launch({
-        headless: false,
-        args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-gpu",
-            "--disable-software-rasterizer",
-            "--disable-web-security",
-            "--disable-site-isolation-trials",
-            "--disable-features=IsolateOrigins,site-per-process"
-        ]
-    });
+browser = await puppeteer.launch({
+    headless: "new",
+    args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--disable-software-rasterizer",
+        "--disable-web-security",
+        "--disable-site-isolation-trials",
+        "--disable-features=IsolateOrigins,site-per-process",
+        "--disable-features=VizDisplayCompositor",
+        "--disable-breakpad",
+        "--no-zygote",
+        "--single-process"
+    ]
+});
 
     page = await browser.newPage();
 
