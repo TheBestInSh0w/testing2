@@ -4,7 +4,6 @@ import puppeteer from "puppeteer";
 const app = express();
 app.use(express.text({ type: "*/*" }));
 
-// CORS for local client
 app.use((req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -14,7 +13,7 @@ app.use((req, res, next) => {
 });
 
 let browser, page;
-let queue = []; // packets from cloud → local
+let queue = [];
 
 async function startBrowser() {
     console.log("[BRIDGE] Launching Chrome...");
@@ -94,8 +93,6 @@ app.post("/send", async (req, res) => {
         await page.evaluate((data) => {
             if (window.eaglerWS && window.eaglerWS.readyState === 1) {
                 window.eaglerWS.send(new Uint8Array(data));
-            } else {
-                console.log("[CLOUD] WS not ready");
             }
         }, arr);
 
