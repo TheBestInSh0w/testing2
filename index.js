@@ -14,7 +14,7 @@ app.use((req, res, next) => {
 });
 
 let browser, page;
-let queue = []; // packets from cloud → local
+let queue = []; // packets from cloud → loca
 
 async function startBrowser() {
     console.log("[BRIDGE] Launching Chrome...");
