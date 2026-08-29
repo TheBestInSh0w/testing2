@@ -4,106 +4,128 @@ import puppeteer from "puppeteer";
 const app = express();
 app.use(express.text({ type: "*/*" }));
 
+// ✅ CORS setup
 app.use((req, res, next) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-    if (req.method === "OPTIONS") return res.sendStatus(200);
-    next();
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") return res.sendStatus(200);
+  next();
 });
 
 let browser, page;
-let queue = [];
+let queue = []; // packets from cloud → local
 
 async function startBrowser() {
-    console.log("[BRIDGE] Launching Chrome...");
+  console.log("[BRIDGE] Launching Chrome...");
 
-    browser = await puppeteer.launch({
-        headless: "new",
-        args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-gpu",
-            "--disable-software-rasterizer",
-            "--disable-web-security",
-            "--disable-site-isolation-trials",
-            "--disable-features=IsolateOrigins,site-per-process",
-            "--disable-features=VizDisplayCompositor",
-            "--disable-breakpad",
-            "--no-zygote",
-            "--single-process"
-        ]
-    });
+  browser = await puppeteer.launch({
+    headless: "new",
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+      "--disable-software-rasterizer",
+      "--disable-web-security",
+      "--disable-site-isolation-trials",
+      "--disable-features=IsolateOrigins,site-per-process",
+      "--disable-features=VizDisplayCompositor",
+      "--disable-breakpad",
+      "--no-zygote",
+      "--single-process"
+    ]
+  });
 
-    page = await browser.newPage();
+  page = await browser.newPage();
 
-    await page.goto("https://YOUR-RAILWAY-APP.up.railway.app/client.html", {
-        waitUntil: "load"
-    });
+  // Pretend to be a normal desktop Chrome
+  await page.setUserAgent(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  );
 
-    console.log("[BRIDGE] Cloud Eagler client loaded");
+  await page.goto("https://YOUR-RAILWAY-APP.up.railway.app/client.html", {
+    waitUntil: "load"
+  });
 
-    const client = await page.target().createCDPSession();
-    await client.send("Network.enable");
+  console.log("[BRIDGE] Cloud Eagler client loaded");
 
-    client.on("Network.webSocketFrameReceived", ({ response }) => {
-        const buf = Buffer.from(response.payloadData, "binary");
-        queue.push(buf.toString("base64"));
-        console.log("[BRIDGE] WS recv | bytes:", buf.length);
-    });
+  // Attach CDP session
+  const client = await page.target().createCDPSession();
+  await client.send("Network.enable");
 
-    client.on("Network.webSocketFrameSent", ({ response }) => {
-        const buf = Buffer.from(response.payloadData, "binary");
-        queue.push(buf.toString("base64"));
-        console.log("[BRIDGE] WS sent | bytes:", buf.length);
-    });
+  client.on("Network.webSocketFrameReceived", ({ response }) => {
+    const buf = Buffer.from(response.payloadData, "binary");
+    queue.push(buf.toString("base64"));
+    console.log("[BRIDGE] WS recv | bytes:", buf.length);
+  });
 
-    // ⭐ Force Chrome to open the REAL WebSocket
-    await page.evaluate(() => {
-        const SERVER_URL = "wss://eaglercraft.cc"; // change if needed
-        window.eaglerWS = new WebSocket(SERVER_URL);
-        console.log("[BRIDGE] Chrome opened real WS:", SERVER_URL);
-    });
+  client.on("Network.webSocketFrameSent", ({ response }) => {
+    const buf = Buffer.from(response.payloadData, "binary");
+    queue.push(buf.toString("base64"));
+    console.log("[BRIDGE] WS sent | bytes:", buf.length);
+  });
 
-    console.log("[BRIDGE] WebSocket hooks installed (CDP)");
+  // ⭐ Open the real Eagler server WebSocket and log everything
+  await page.evaluate(() => {
+    const SERVER_URL = "wss://eaglercraft.cc";
+    console.log("[BRIDGE] About to open WS:", SERVER_URL);
+
+    const ws = new WebSocket(SERVER_URL);
+
+    ws.onopen = () => console.log("[BRIDGE] WS open in Chrome");
+    ws.onerror = (e) => console.log("[BRIDGE] WS error in Chrome:", e);
+    ws.onclose = () => console.log("[BRIDGE] WS closed in Chrome");
+
+    window.eaglerWS = ws;
+  });
+
+  console.log("[BRIDGE] WebSocket hooks installed (CDP)");
 }
 
 startBrowser().catch(err => {
-    console.error("[BRIDGE] Chrome failed:", err);
+  console.error("[BRIDGE] Chrome failed:", err);
 });
 
+// ✅ /send (local → cloud)
 app.post("/send", async (req, res) => {
-    try {
-        const raw = Buffer.from(req.body, "base64");
-        const arr = [...new Uint8Array(raw)];
+  try {
+    const raw = Buffer.from(req.body, "base64");
+    const arr = [...new Uint8Array(raw)];
 
-        console.log("[BRIDGE] /send | bytes:", arr.length);
+    console.log("[BRIDGE] /send | bytes:", arr.length);
 
-        await page.evaluate((data) => {
-            if (window.eaglerWS && window.eaglerWS.readyState === 1) {
-                window.eaglerWS.send(new Uint8Array(data));
-            }
-        }, arr);
+    await page.evaluate(() => {
+      if (window.eaglerWS && window.eaglerWS.readyState === 1) {
+        console.log("[BRIDGE] Sending test packet from Chrome");
+        window.eaglerWS.send(new Uint8Array([0x01, 0x02, 0x03]));
+      } else {
+        console.log("[BRIDGE] WS not open or not ready");
+      }
+    });
 
-        res.send("ok");
-    } catch (e) {
-        console.log("[BRIDGE] /send ERROR:", e);
-        res.status(500).send("error");
-    }
+    res.send("ok");
+  } catch (e) {
+    console.log("[BRIDGE] /send ERROR:", e);
+    res.status(500).send("error");
+  }
 });
 
+// ✅ /recv (cloud → local)
 app.get("/recv", (req, res) => {
-    if (queue.length > 0) {
-        res.send(queue.shift());
-    } else {
-        res.send("");
-    }
+  if (queue.length > 0) {
+    res.send(queue.shift());
+  } else {
+    res.send("");
+  }
 });
 
+// ✅ Serve client files
 app.use(express.static("public"));
 
+// ✅ Railway port fix
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log("[BRIDGE] Running on port", PORT);
+  console.log("[BRIDGE] Running on port", PORT);
 });
