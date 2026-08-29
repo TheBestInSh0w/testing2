@@ -45,11 +45,11 @@ async function startBrowser() {
 
     console.log("[BRIDGE] Cloud Eagler client loaded");
 
-    // ⭐ Attach to Chrome DevTools Protocol
+    // Attach CDP session
     const client = await page.target().createCDPSession();
     await client.send("Network.enable");
 
-    // ⭐ Intercept WebSocket frames (cloud → bridge)
+    // Cloud → bridge
     client.on("Network.webSocketFrameReceived", ({ response }) => {
         const data = response.payloadData;
         const buf = Buffer.from(data, "binary");
@@ -58,7 +58,7 @@ async function startBrowser() {
         console.log("[BRIDGE] WS recv | bytes:", buf.length);
     });
 
-    // ⭐ Intercept WebSocket frames sent (bridge → cloud)
+    // Bridge → cloud
     client.on("Network.webSocketFrameSent", ({ response }) => {
         const data = response.payloadData;
         const buf = Buffer.from(data, "binary");
@@ -107,6 +107,8 @@ app.get("/recv", (req, res) => {
 // Serve client
 app.use(express.static("public"));
 
-app.listen(3000, () => {
-    console.log("[BRIDGE] Running on port 3000");
+// ⭐ REQUIRED FOR RAILWAY — DO NOT REMOVE ⭐
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log("[BRIDGE] Running on port", PORT);
 });
