@@ -4,6 +4,7 @@ import puppeteer from "puppeteer";
 const app = express();
 app.use(express.text({ type: "*/*" }));
 
+// CORS
 app.use((req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -13,28 +14,28 @@ app.use((req, res, next) => {
 });
 
 let browser, page;
-let queue = [];
+let queue = []; // packets from cloud → local
 
 async function startBrowser() {
     console.log("[BRIDGE] Launching Chrome...");
 
-browser = await puppeteer.launch({
-    headless: "new",
-    args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--disable-software-rasterizer",
-        "--disable-web-security",
-        "--disable-site-isolation-trials",
-        "--disable-features=IsolateOrigins,site-per-process",
-        "--disable-features=VizDisplayCompositor",
-        "--disable-breakpad",
-        "--no-zygote",
-        "--single-process"
-    ]
-});
+    browser = await puppeteer.launch({
+        headless: "new",
+        args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--disable-software-rasterizer",
+            "--disable-web-security",
+            "--disable-site-isolation-trials",
+            "--disable-features=IsolateOrigins,site-per-process",
+            "--disable-features=VizDisplayCompositor",
+            "--disable-breakpad",
+            "--no-zygote",
+            "--single-process"
+        ]
+    });
 
     page = await browser.newPage();
 
@@ -44,39 +45,48 @@ browser = await puppeteer.launch({
 
     console.log("[BRIDGE] Cloud Eagler client loaded");
 
+    // Cloud → Bridge
     await page.exposeFunction("cloudToBridge", (arr) => {
         const b64 = Buffer.from(Uint8Array.from(arr)).toString("base64");
         queue.push(b64);
         console.log("[BRIDGE] Packet from cloud | bytes:", arr.length);
     });
 
+    // ⭐ SAFE WebSocket hook (no illegal invocation)
     await page.evaluate(() => {
         const OrigWS = window.WebSocket;
 
-        window.WebSocket = function(url, proto) {
-            const ws = new OrigWS(url, proto);
-            if (url.includes("wss://")) {
-                window.eaglerWS = ws;
-            }
-            return ws;
-        };
+        // Wrap constructor safely
+        window.WebSocket = new Proxy(OrigWS, {
+            construct(target, args) {
+                const ws = new target(...args);
 
+                if (args[0].includes("wss://")) {
+                    window.eaglerWS = ws;
+                }
+
+                return ws;
+            }
+        });
+
+        // Wrap send()
         const origSend = OrigWS.prototype.send;
         OrigWS.prototype.send = function(data) {
             if (this.url.includes("wss://")) {
                 const arr = new Uint8Array(data);
                 window.cloudToBridge([...arr]);
             }
-            return origSend.call(this, data);
+            return Reflect.apply(origSend, this, [data]);
         };
 
+        // Wrap onmessage
         const origOnMessage = OrigWS.prototype.onmessage;
         OrigWS.prototype.onmessage = function(ev) {
             if (this.url.includes("wss://")) {
                 const arr = new Uint8Array(ev.data);
                 window.cloudToBridge([...arr]);
             }
-            return origOnMessage.call(this, ev);
+            return Reflect.apply(origOnMessage, this, [ev]);
         };
     });
 
@@ -87,6 +97,7 @@ startBrowser().catch(err => {
     console.error("[BRIDGE] Chrome failed:", err);
 });
 
+// /send (local → cloud)
 app.post("/send", async (req, res) => {
     try {
         const raw = Buffer.from(req.body, "base64");
@@ -107,6 +118,7 @@ app.post("/send", async (req, res) => {
     }
 });
 
+// /recv (cloud → local)
 app.get("/recv", (req, res) => {
     if (queue.length > 0) {
         res.send(queue.shift());
@@ -115,6 +127,7 @@ app.get("/recv", (req, res) => {
     }
 });
 
+// Serve client
 app.use(express.static("public"));
 
 app.listen(3000, () => {
