@@ -14,7 +14,7 @@ app.use((req, res, next) => {
 });
 
 let browser, page;
-let queue = []; // packets from cloud → loca
+let queue = []; // packets from cloud → local
 
 async function startBrowser() {
     console.log("[BRIDGE] Launching Chrome...");
@@ -45,52 +45,29 @@ async function startBrowser() {
 
     console.log("[BRIDGE] Cloud Eagler client loaded");
 
-    // Cloud → Bridge
-    await page.exposeFunction("cloudToBridge", (arr) => {
-        const b64 = Buffer.from(Uint8Array.from(arr)).toString("base64");
+    // ⭐ Attach to Chrome DevTools Protocol
+    const client = await page.target().createCDPSession();
+    await client.send("Network.enable");
+
+    // ⭐ Intercept WebSocket frames (cloud → bridge)
+    client.on("Network.webSocketFrameReceived", ({ response }) => {
+        const data = response.payloadData;
+        const buf = Buffer.from(data, "binary");
+        const b64 = buf.toString("base64");
         queue.push(b64);
-        console.log("[BRIDGE] Packet from cloud | bytes:", arr.length);
+        console.log("[BRIDGE] WS recv | bytes:", buf.length);
     });
 
-    // ⭐ SAFE WebSocket hook (no illegal invocation)
-    await page.evaluate(() => {
-        const OrigWS = window.WebSocket;
-
-        // Wrap constructor safely
-        window.WebSocket = new Proxy(OrigWS, {
-            construct(target, args) {
-                const ws = new target(...args);
-
-                if (args[0].includes("wss://")) {
-                    window.eaglerWS = ws;
-                }
-
-                return ws;
-            }
-        });
-
-        // Wrap send()
-        const origSend = OrigWS.prototype.send;
-        OrigWS.prototype.send = function(data) {
-            if (this.url.includes("wss://")) {
-                const arr = new Uint8Array(data);
-                window.cloudToBridge([...arr]);
-            }
-            return Reflect.apply(origSend, this, [data]);
-        };
-
-        // Wrap onmessage
-        const origOnMessage = OrigWS.prototype.onmessage;
-        OrigWS.prototype.onmessage = function(ev) {
-            if (this.url.includes("wss://")) {
-                const arr = new Uint8Array(ev.data);
-                window.cloudToBridge([...arr]);
-            }
-            return Reflect.apply(origOnMessage, this, [ev]);
-        };
+    // ⭐ Intercept WebSocket frames sent (bridge → cloud)
+    client.on("Network.webSocketFrameSent", ({ response }) => {
+        const data = response.payloadData;
+        const buf = Buffer.from(data, "binary");
+        const b64 = buf.toString("base64");
+        queue.push(b64);
+        console.log("[BRIDGE] WS sent | bytes:", buf.length);
     });
 
-    console.log("[BRIDGE] WebSocket hooks installed");
+    console.log("[BRIDGE] WebSocket hooks installed (CDP)");
 }
 
 startBrowser().catch(err => {
