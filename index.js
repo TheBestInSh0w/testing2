@@ -43,7 +43,7 @@ async function startBrowser() {
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
   );
 
-  await page.goto("https://YOUR-RAILWAY-APP.up.railway.app/client.html", {
+  await page.goto("https://testing2-production-849e.up.railway.app/client.html", {
     waitUntil: "load"
   });
 
