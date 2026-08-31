@@ -4,7 +4,6 @@ import puppeteer from "puppeteer";
 const app = express();
 app.use(express.text({ type: "*/*" }));
 
-// ✅ CORS setup
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -14,7 +13,7 @@ app.use((req, res, next) => {
 });
 
 let browser, page;
-let queue = []; // packets from cloud → local
+let queue = [];
 
 async function startBrowser() {
   console.log("[BRIDGE] Launching Chrome...");
@@ -39,7 +38,6 @@ async function startBrowser() {
 
   page = await browser.newPage();
 
-  // Pretend to be a normal desktop Chrome
   await page.setUserAgent(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -51,7 +49,6 @@ async function startBrowser() {
 
   console.log("[BRIDGE] Cloud Eagler client loaded");
 
-  // Attach CDP session
   const client = await page.target().createCDPSession();
   await client.send("Network.enable");
 
@@ -67,28 +64,29 @@ async function startBrowser() {
     console.log("[BRIDGE] WS sent | bytes:", buf.length);
   });
 
-  // ⭐ Open the real Eagler server WebSocket and log everything
-  await page.evaluate(() => {
-    const SERVER_URL = "wss://eaglercraft.cc";
-    console.log("[BRIDGE] About to open WS:", SERVER_URL);
+  // ⭐ Inject script that opens WS in main world
+  await page.addScriptTag({
+    content: `
+      const SERVER_URL = "wss://eaglercraft.cc";
+      console.log("[BRIDGE] Injected script opening WS:", SERVER_URL);
 
-    const ws = new WebSocket(SERVER_URL);
+      const ws = new WebSocket(SERVER_URL);
 
-    ws.onopen = () => console.log("[BRIDGE] WS open in Chrome");
-    ws.onerror = (e) => console.log("[BRIDGE] WS error in Chrome:", e);
-    ws.onclose = () => console.log("[BRIDGE] WS closed in Chrome");
+      ws.onopen = () => console.log("[BRIDGE] WS open in Chrome");
+      ws.onerror = (e) => console.log("[BRIDGE] WS error in Chrome:", e);
+      ws.onclose = () => console.log("[BRIDGE] WS closed in Chrome");
 
-    window.eaglerWS = ws;
+      window.eaglerWS = ws;
+    `
   });
 
-  console.log("[BRIDGE] WebSocket hooks installed (CDP)");
+  console.log("[BRIDGE] WebSocket injection complete");
 }
 
 startBrowser().catch(err => {
   console.error("[BRIDGE] Chrome failed:", err);
 });
 
-// ✅ /send (local → cloud)
 app.post("/send", async (req, res) => {
   try {
     const raw = Buffer.from(req.body, "base64");
@@ -96,14 +94,11 @@ app.post("/send", async (req, res) => {
 
     console.log("[BRIDGE] /send | bytes:", arr.length);
 
-    await page.evaluate(() => {
+    await page.evaluate((data) => {
       if (window.eaglerWS && window.eaglerWS.readyState === 1) {
-        console.log("[BRIDGE] Sending test packet from Chrome");
-        window.eaglerWS.send(new Uint8Array([0x01, 0x02, 0x03]));
-      } else {
-        console.log("[BRIDGE] WS not open or not ready");
+        window.eaglerWS.send(new Uint8Array(data));
       }
-    });
+    }, arr);
 
     res.send("ok");
   } catch (e) {
@@ -112,7 +107,6 @@ app.post("/send", async (req, res) => {
   }
 });
 
-// ✅ /recv (cloud → local)
 app.get("/recv", (req, res) => {
   if (queue.length > 0) {
     res.send(queue.shift());
@@ -121,10 +115,8 @@ app.get("/recv", (req, res) => {
   }
 });
 
-// ✅ Serve client files
 app.use(express.static("public"));
 
-// ✅ Railway port fix
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("[BRIDGE] Running on port", PORT);
